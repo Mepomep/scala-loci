@@ -9,7 +9,7 @@ scalaVersion in ThisBuild := "2.12.8"
 
 crossScalaVersions in ThisBuild := Seq("2.11.12", "2.12.8")
 
-organization in ThisBuild := "de.tuda.stg"
+organization in ThisBuild := "de.tuda.mepomep"
 
 licenses in ThisBuild += "Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")
 

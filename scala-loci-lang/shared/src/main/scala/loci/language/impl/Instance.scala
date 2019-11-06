@@ -222,26 +222,30 @@ class Instance(val c: blackbox.Context) {
       case _ if documentationCompiler =>
         q"${termNames.ROOTPKG}.scala.Predef.???"
 
-      case q"new { ..$earlydefs } with $inst[$tpt](...$exprss) { $self => ..$body }"
+      case q"new { ..$earlydefs } with $inst[(..$tpts)](...$exprss) { $self => ..$body }"
           if inst.tpe <:< types.instance.typeConstructor =>
 
-        val pos = if (tpt.pos != NoPosition) tpt.pos else c.enclosingPosition
+        val pos = tpts.map(tree => if (tree.pos != NoPosition) tree.pos else c.enclosingPosition)
 
         if (earlydefs.nonEmpty)
           c.abort(earlydefs.head.pos,
             "Early initialization not permitted (note that values are automatically initialized early if possible)")
 
         // create prefix path for multitier module
-        val peer = TypeName(s"$$loci$$peer$$${tpt.symbol.name}")
-        val signature = TermName(s"$$loci$$peer$$sig$$${tpt.symbol.name}")
-        val ties = TermName(s"$$loci$$peer$$ties$$${tpt.symbol.name}")
+        val peer = tpts.map(tree => TypeName(s"$$loci$$peer$$${tree.symbol.name}"))
+        val signature = tpts.map(tree => TermName(s"$$loci$$peer$$sig$$${tree.symbol.name}"))
+        val ties = tpts.map(tree => TermName(s"$$loci$$peer$$ties$$${tree.symbol.name}"))
 
-        val (prefix, placedValues) = tpt match {
+        val (prefix, placedValues) = tpts(0) match {
           case tq"$prefix.$_" =>
-            prefix -> (prefix.tpe member peer)
+            prefix -> (prefix.tpe member peer(0))
           case _ =>
             EmptyTree -> NoSymbol
         }
+        println(showRaw(prefix))
+        println(show(prefix))
+        println(showCode(prefix))
+
 
         if (prefix.nonEmpty) {
           val symbol = prefix.tpe.typeSymbol
@@ -254,18 +258,18 @@ class Instance(val c: blackbox.Context) {
             symbol != NoSymbol && hasMultitierBase(symbol.owner)
 
           if (!(allAnnotations(symbol) exists { _.tree.tpe <:< types.multitierModule }))
-            c.abort(pos, s"$prefix is not a multitier module")
+            c.abort(pos(0), s"$prefix is not a multitier module")
 
           if (!symbol.isModule && !symbol.isModuleClass && !symbol.isFinal)
-            c.abort(pos, s"$prefix is not a valid multitier module instance, " +
+            c.abort(pos(0), s"$prefix is not a valid multitier module instance, " +
               "i.e., an object or an instance of a final class")
 
           if (hasMultitierBase(symbol.owner))
-            c.abort(pos, s"cannot instantiate peer of nested multitier module $prefix")
+            c.abort(pos(0), s"cannot instantiate peer of nested multitier module $prefix")
         }
 
         if (!placedValues.isType)
-          c.abort(pos, s"$tpt is not a peer type")
+          c.abort(pos(0), s"$tpts is not a peer type")
 
         // parse named arguments for constructor invocation of anonymous class
         val (args, exprs) =
@@ -315,11 +319,11 @@ class Instance(val c: blackbox.Context) {
         val (earlyDefinitions, lateDefinitions) =
           collectDefinitions(
             prefix.tpe,
-            tpt.tpe,
+            tpts(0).tpe,
             placedValues.asType.toType.asSeenFrom(prefix.tpe, prefix.tpe.typeSymbol),
             body,
             q"$$loci$$module",
-            tpt.pos)
+            tpts(0).pos)
 
         val definedClasses = (instance collect {
           case tree: DefTree if tree.symbol.isClass => tree.symbol
@@ -350,7 +354,7 @@ class Instance(val c: blackbox.Context) {
                 val tpe = asSeenFrom(symbol.info.finalResultType.widen, prefix.tpe)
                 !(tpe <:< definitions.NothingTpe) &&
                 !(tpe <:< definitions.NullTpe) &&
-                (!(tpe <:< types.on) || tpt.tpe <:< tpe.typeArgs.last)
+                (!(tpe <:< types.on) || tpts(0).tpe <:< tpe.typeArgs.last)
               }
             })
             q"${termNames.ROOTPKG}.scala.Some(main _)"

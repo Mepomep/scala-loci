@@ -28,7 +28,8 @@ class System(
     executionContext: ExecutionContext,
     remoteConnections: RemoteConnections,
     singleConnectedRemotes: Seq[Remote.Reference],
-    connectingRemotes: Seq[Future[Remote.Reference]]) {
+    connectingRemotes: Seq[Future[Remote.Reference]],
+    magicFunction: (Any*) => Either[Seq[Remote.Reference], Remote.Reference]) {
 
   private implicit val context: ExecutionContext = executionContext
 
@@ -477,54 +478,69 @@ class System(
       Value.Reference(id, id, remote, this)
     }
 
-    if (!requestResult && (!placedValue.stable || !placedValue.result.connected)) {
-      remoteReferences(peer, remotes, earlyAccess = true) foreach { remote =>
-        sendRequest(ChannelMessage.Type.Call, createReference(remote))
-      }
-      Seq.empty
-    }
-    else
-      remoteReferences(peer, remotes, earlyAccess = true) map { remote =>
-        val remoteSignature = remote -> placedValue.signature
-        val reference = createReference(remote)
-        val channel = reference.channel
+    val concreteRole = magicFunction(peer, remotes, placedValue, arguments)
 
-        val value = new System.ValueCell[T] {
-          lazy val value = {
-            val promise = Promise[MessageBuffer]
-
-            if (isConnected(remote)) {
-              channelResponseHandlers.put(
-                channel,
-                placedValue.result.connected -> { promise tryComplete _ })
-
-              channel.closed notify { _ =>
-                promise tryFailure new RemoteAccessException(RemoteAccessException.ChannelClosed)
-              }
-
-              if (!isChannelOpen(channel))
-                promise tryFailure new RemoteAccessException(RemoteAccessException.ChannelClosed)
-              else
-                sendRequest(ChannelMessage.Type.Request, reference)
-            }
-            else
-              promise tryFailure new RemoteAccessException(RemoteAccessException.RemoteDisconnected)
-
-            placedValue.result.unmarshal(promise.future, reference)
+    concreteRole match{
+      case Left(remoteRoles) =>
+        if (!requestResult && (!placedValue.stable || !placedValue.result.connected)) {
+          remoteRoles foreach { remote =>
+            sendRequest(ChannelMessage.Type.Call, createReference(remote))
           }
+          Seq.empty
         }
-
-        if (placedValue.stable && placedValue.result.connected)
-          (Option(pushedValues.putIfAbsent(remoteSignature, value)) getOrElse value match {
-            case value: System.ValueCell[T] @unchecked =>
-              value.value
-          }): T
         else
-          value.value
-      }
+          remoteRoles map { remote =>
+            val remoteSignature = remote -> placedValue.signature
+            val reference = createReference(remote)
+            val channel = reference.channel
+
+            val value = new System.ValueCell[T] {
+              lazy val value = {
+                val promise = Promise[MessageBuffer]
+
+                if (isConnected(remote)) {
+                  channelResponseHandlers.put(
+                    channel,
+                    placedValue.result.connected -> { promise tryComplete _ })
+
+                  channel.closed notify { _ =>
+                    promise tryFailure new RemoteAccessException(RemoteAccessException.ChannelClosed)
+                  }
+
+                  if (!isChannelOpen(channel))
+                    promise tryFailure new RemoteAccessException(RemoteAccessException.ChannelClosed)
+                  else
+                    sendRequest(ChannelMessage.Type.Request, reference)
+                }
+                else
+                  promise tryFailure new RemoteAccessException(RemoteAccessException.RemoteDisconnected)
+
+                placedValue.result.unmarshal(promise.future, reference)
+              }
+            }
+
+            if (placedValue.stable && placedValue.result.connected)
+              (Option(pushedValues.putIfAbsent(remoteSignature, value)) getOrElse value match {
+                case value: System.ValueCell[T] @unchecked =>
+                  value.value
+              }): T
+            else
+              value.value
+          }
+      case Right(localRole) =>
+        val reference = createReference(localRole)
+        val payload = placedValue.arguments.marshal(arguments, reference)
+        val result = values.$loci$dispatch(payload, placedValue.signature, Value.Reference(reference.channelName, reference.channelName, localRole, System.this))
+        val promise = Promise[MessageBuffer]
+
+        placedValue.result.connected -> { promise tryComplete result }
+        Seq(placedValue.result.unmarshal(promise.future, reference))
+
+
+    }
+
+
   }
-
-
 
 
   // start up system
